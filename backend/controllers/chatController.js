@@ -7,9 +7,9 @@ import User from '../models/User.js'
 // Models in priority order — if one hits rate limit, next is tried
 const GROQ_MODELS = [
   'llama-3.3-70b-versatile',
-  'llama-3.1-70b-versatile',
   'llama-3.1-8b-instant',
   'gemma2-9b-it',
+  'mixtral-8x7b-32768',
 ]
 
 const groqCompletion = async (params) => {
@@ -19,9 +19,12 @@ const groqCompletion = async (params) => {
     try {
       return await groq.chat.completions.create({ ...params, model })
     } catch (err) {
-      const isRateLimit = err?.status === 429 || err?.error?.code === 'rate_limit_exceeded'
-      if (isRateLimit) {
-        console.warn(`Rate limit hit on ${model}, trying next model...`)
+      const shouldSkip = err?.status === 429 ||
+        err?.error?.code === 'rate_limit_exceeded' ||
+        err?.error?.code === 'model_decommissioned' ||
+        err?.error?.type === 'invalid_request_error'
+      if (shouldSkip) {
+        console.warn(`Skipping model ${model}: ${err?.error?.code || err?.status}`)
         lastError = err
         continue
       }

@@ -17,18 +17,20 @@ export default function HomePage() {
       </div>
 
       {/* Navigation Bar */}
-      <nav className="sticky top-0 z-50 backdrop-blur-md border-b px-6 py-4 flex items-center justify-between transition-all duration-300"
+      <nav className="sticky top-0 z-50 backdrop-blur-md border-b px-4 sm:px-6 py-3 flex items-center justify-between transition-all duration-300"
         style={{ backgroundColor: 'var(--bg-nav)', borderColor: 'var(--border)' }}>
-        <div className="flex items-center gap-3 group cursor-pointer">
-          <div className="w-8.5 h-8.5 rounded-xl bg-primary-500 flex items-center justify-center shadow-lg shadow-primary-500/10 transition-transform group-hover:scale-102">
+
+        {/* Logo */}
+        <div className="flex items-center gap-2.5 group cursor-pointer flex-shrink-0">
+          <div className="w-8 h-8 rounded-xl bg-primary-500 flex items-center justify-center shadow-lg shadow-primary-500/10 transition-transform group-hover:scale-105">
             <span className="font-display font-black text-white text-xs tracking-wider">AL</span>
           </div>
-          <div className="flex flex-col">
-            <span className="font-display font-bold text-sm tracking-tight" style={{ color: 'var(--text-primary)' }}>Afriq Learn</span>
-            <span className="text-[10px] font-semibold tracking-wide text-primary-500 uppercase leading-tight">Intelligent Learning Hub</span>
-          </div>
+          <span className="font-display font-bold text-sm tracking-tight" style={{ color: 'var(--text-primary)' }}>
+            Afriq Learn
+          </span>
         </div>
-        
+
+        {/* Desktop nav links */}
         <div className="hidden md:flex items-center gap-8">
           {['Features', 'How it works', 'About'].map(item => (
             <a key={item} href={`#${item.toLowerCase().replace(' ', '-')}`}
@@ -39,16 +41,17 @@ export default function HomePage() {
           ))}
         </div>
 
-        <div className="flex items-center gap-4">
+        {/* Right actions */}
+        <div className="flex items-center gap-2 sm:gap-3">
           <ThemeToggle />
           <button onClick={() => navigate('/signin')}
-            className="text-xs font-semibold uppercase tracking-wider transition-colors hover:text-primary-500 px-2 py-1.5"
-            style={{ color: 'var(--text-secondary)' }}>
+            className="text-xs font-semibold uppercase tracking-wider transition-colors hover:text-primary-500 px-3 py-2 rounded-lg border"
+            style={{ color: 'var(--text-secondary)', borderColor: 'var(--border)' }}>
             Sign In
           </button>
           <button onClick={() => navigate('/signup')}
-            className="bg-primary-500 hover:bg-primary-600 text-white font-bold text-xs uppercase tracking-wider px-5 py-2.5 rounded-xl transition-all shadow-md shadow-primary-500/10 hover:shadow-primary-500/20">
-            Initialize
+            className="bg-primary-500 hover:bg-primary-600 text-white font-bold text-xs uppercase tracking-wider px-3 sm:px-5 py-2 rounded-xl transition-all shadow-md shadow-primary-500/10 hover:shadow-primary-500/20 whitespace-nowrap">
+            Get Started
           </button>
         </div>
       </nav>

@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import ReactMarkdown from 'react-markdown'
-import { X, BookOpen, Clock, Loader, ChevronRight, Edit2, Trash2, Plus, Play, FileText, Save, Sparkles, ArrowLeft, ExternalLink } from 'lucide-react'
+import { X, BookOpen, Clock, Loader, ChevronRight, Edit2, Trash2, Plus, Play, FileText, Save, Sparkles, ExternalLink, LayoutDashboard } from 'lucide-react'
 
 const blankResource = () => ({ type: 'video', title: '', url: '', source: '' })
 const blankNode = () => ({
@@ -195,9 +195,6 @@ export default function RoadmapPage() {
       <div className="border-b sticky top-0 backdrop-blur z-10"
         style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-nav)' }}>
         <div className="px-4 sm:px-6 py-3 sm:py-4 flex items-center gap-3 sm:gap-4">
-          <button onClick={() => navigate('/dashboard')} aria-label="Back to dashboard" className="flex-shrink-0 -ml-1 p-1 rounded-lg" style={{ color: 'var(--text-muted)' }}>
-            <ArrowLeft size={20} />
-          </button>
           <div className="w-8 h-8 rounded-lg bg-primary-500 flex items-center justify-center flex-shrink-0">
             <span className="font-display font-bold text-white text-sm">AL</span>
           </div>
@@ -214,6 +211,7 @@ export default function RoadmapPage() {
           <button onClick={() => navigate('/dashboard')}
             className="flex items-center gap-2 text-sm px-3 sm:px-4 py-2 rounded-xl border transition-colors flex-shrink-0"
             style={{ backgroundColor: 'var(--bg-input)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}>
+            <LayoutDashboard size={15} />
             <span className="hidden sm:inline">Dashboard</span>
           </button>
           <button onClick={() => setEditMode(e => !e)}

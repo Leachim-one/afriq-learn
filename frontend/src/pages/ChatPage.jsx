@@ -3,19 +3,48 @@ import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import { Send, Bot, User, Loader, ArrowLeft } from 'lucide-react'
 
+const STORAGE_KEY = 'afriqlearn_chat_messages'
+const ROADMAP_KEY = 'afriqlearn_chat_roadmap'
+
+const INITIAL_MESSAGE = {
+  role: 'assistant',
+  content: "Hi! 👋 I'm your career guide at Afriq Learn. I'm here to help you figure out exactly where you want to go in tech and build a roadmap that actually fits your life.\n\nLet's start simple — what's on your mind? Are you just getting started with tech, or do you already have some experience? Feel free to tell me your story!"
+}
+
 export default function ChatPage() {
   const navigate = useNavigate()
   const messagesEndRef = useRef(null)
-  const [messages, setMessages] = useState([{
-    role: 'assistant',
-    content: "Hi! 👋 I'm your career guide at Afriq Learn. I'm here to help you figure out exactly where you want to go in tech and build a roadmap that actually fits your life.\n\nLet's start simple — what's on your mind? Are you just getting started with tech, or do you already have some experience? Feel free to tell me your story!"
-  }])
+
+  const [messages, setMessages] = useState(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY)
+      return saved ? JSON.parse(saved) : [INITIAL_MESSAGE]
+    } catch { return [INITIAL_MESSAGE] }
+  })
+
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
-  const [roadmapReady, setRoadmapReady] = useState(false)
-  const [roadmapData, setRoadmapData] = useState(null)
+  const [roadmapReady, setRoadmapReady] = useState(() => !!localStorage.getItem(ROADMAP_KEY))
+  const [roadmapData, setRoadmapData] = useState(() => {
+    try {
+      const saved = localStorage.getItem(ROADMAP_KEY)
+      return saved ? JSON.parse(saved) : null
+    } catch { return null }
+  })
 
   const user = JSON.parse(localStorage.getItem('user') || '{}')
+
+  // Save messages to localStorage whenever they change
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(messages))
+  }, [messages])
+
+  // Save roadmap to localStorage when ready
+  useEffect(() => {
+    if (roadmapData) {
+      localStorage.setItem(ROADMAP_KEY, JSON.stringify(roadmapData))
+    }
+  }, [roadmapData])
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
 
@@ -50,12 +79,17 @@ export default function ChatPage() {
     try {
       const token = localStorage.getItem('token')
       await axios.post('/api/chat/save-new-roadmap', { roadmap: roadmapData }, { headers: { Authorization: `Bearer ${token}` } })
+      // Clear chat now that roadmap is saved
+      localStorage.removeItem(STORAGE_KEY)
+      localStorage.removeItem(ROADMAP_KEY)
       navigate('/roadmap')
     } catch (error) {
       if (error.response?.data?.message?.includes('2 roadmaps')) {
         alert('You already have 2 saved roadmaps! Go to My Roadmaps to delete one first.')
         navigate('/my-roadmaps')
       } else {
+        localStorage.removeItem(STORAGE_KEY)
+        localStorage.removeItem(ROADMAP_KEY)
         navigate('/roadmap')
       }
     }

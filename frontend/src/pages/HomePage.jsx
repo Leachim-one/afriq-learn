@@ -49,10 +49,6 @@ export default function HomePage() {
             style={{ color: 'var(--text-secondary)', borderColor: 'var(--border)' }}>
             Sign In
           </button>
-          <button onClick={() => navigate('/signup')}
-            className="bg-primary-500 hover:bg-primary-600 text-white font-bold text-xs uppercase tracking-wider px-3 sm:px-5 py-2 rounded-xl transition-all shadow-md shadow-primary-500/10 hover:shadow-primary-500/20 whitespace-nowrap">
-            Get Started
-          </button>
         </div>
       </nav>
 

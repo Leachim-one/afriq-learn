@@ -3,6 +3,34 @@ import Groq from 'groq-sdk'
 import jwt from 'jsonwebtoken'
 import User from '../models/User.js'
 
+
+// Models in priority order — if one hits rate limit, next is tried
+const GROQ_MODELS = [
+  'llama-3.3-70b-versatile',
+  'llama-3.1-70b-versatile',
+  'llama-3.1-8b-instant',
+  'gemma2-9b-it',
+]
+
+const groqCompletion = async (params) => {
+  const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
+  let lastError
+  for (const model of GROQ_MODELS) {
+    try {
+      return await groq.chat.completions.create({ ...params, model })
+    } catch (err) {
+      const isRateLimit = err?.status === 429 || err?.error?.code === 'rate_limit_exceeded'
+      if (isRateLimit) {
+        console.warn(`Rate limit hit on ${model}, trying next model...`)
+        lastError = err
+        continue
+      }
+      throw err
+    }
+  }
+  throw lastError
+}
+
 const normalizeId = (value) => String(value ?? '')
 
 const toPlainRoadmap = (roadmap) => {
@@ -79,7 +107,6 @@ const normalizeRoadmap = (roadmap) => ({
 
 export const chat = async (req, res) => {
   try {
-    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
 
     const { messages, userProfile } = req.body
 
@@ -149,8 +176,7 @@ IMPORTANT: Do NOT generate a roadmap until you have had at least 6 back-and-fort
       }))
     ]
 
-    const completion = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
+    const completion = await groqCompletion({
       messages: formattedMessages,
       max_tokens: 4000,
       temperature: 0.7
@@ -166,7 +192,6 @@ IMPORTANT: Do NOT generate a roadmap until you have had at least 6 back-and-fort
 
 export const generateRoadmap = async (req, res) => {
   try {
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
 
     const { careerTitle, userProfile, messages } = req.body
 
@@ -204,8 +229,7 @@ Rules:
 - Use YouTube search links for videos
 - estimatedTime should be realistic for the user's skill level and pace`
 
-    const completion = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
+    const completion = await groqCompletion({
       messages: [{ role: 'user', content: prompt }],
       max_tokens: 4000,
       temperature: 0.7
@@ -381,7 +405,6 @@ export const updateNodeStatus = async (req, res) => {
 
 export const generateQuiz = async (req, res) => {
   try {
-    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
 
     const { topic, difficulty, count = 5 } = req.body
     const safeCount = Math.min(Math.max(Number(count) || 5, 3), 15)
@@ -412,8 +435,7 @@ Rules:
 - Focus on practical understanding, not trick questions
 - Match the difficulty level`
 
-    const completion = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
+    const completion = await groqCompletion({
       messages: [{ role: 'user', content: prompt }],
       max_tokens: 2000,
       temperature: 0.7
@@ -514,7 +536,6 @@ export const getTopicVideos = async (req, res) => {
 
 export const getTopicContent = async (req, res) => {
   try {
-    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
     const { topic, skillLevel } = req.body
 
     const prompt = `You are a tech tutor for Afriq Learn. For the topic "${topic}" (learner level: ${skillLevel || 'Beginner'}), respond ONLY with a valid JSON object. No markdown fences, no code blocks, no extra text before or after. All string values must be plain text with no newlines, no backticks, no unescaped quotes.
@@ -522,8 +543,7 @@ export const getTopicContent = async (req, res) => {
 Use exactly this structure:
 {"summary":"2-3 sentence plain-language explanation of what this is and why it matters","notes":"A concise lesson under 300 words. Use plain text only, no markdown, no code blocks, no special characters.","keyPoints":["short takeaway 1","short takeaway 2","short takeaway 3"],"searchQuery":"best short youtube search phrase for this topic"}`
 
-    const completion = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
+    const completion = await groqCompletion({
       messages: [{ role: 'user', content: prompt }],
       max_tokens: 1000,
       temperature: 0.4
@@ -571,7 +591,6 @@ Use exactly this structure:
 // ---- (#13) In-app help/support chatbot ----
 export const helpChat = async (req, res) => {
   try {
-    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
     const { messages } = req.body
 
     const system = `You are "Afriq Helper", the in-app support assistant for Afriq Learn, a learning platform for aspiring African tech talent.
@@ -584,8 +603,7 @@ Features you can explain:
 - Profile: edit name, preferred language, skill level, pace, toggle email reminders.
 Keep answers short, friendly and practical. If asked something off-topic, gently steer back to learning or using the app.`
 
-    const completion = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
+    const completion = await groqCompletion({
       messages: [{ role: 'system', content: system }, ...messages],
       max_tokens: 700,
       temperature: 0.6

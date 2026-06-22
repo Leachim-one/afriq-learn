@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
-import { Send, Bot, User, Loader, ArrowLeft } from 'lucide-react'
+import { Send, Bot, User, ArrowLeft } from 'lucide-react'
 
 const STORAGE_KEY = 'afriqlearn_chat_messages'
 const ROADMAP_KEY = 'afriqlearn_chat_roadmap'
@@ -50,25 +50,49 @@ export default function ChatPage() {
 
   const sendMessage = async () => {
     if (!input.trim() || loading) return
+    
     const userMessage = { role: 'user', content: input }
     const updatedMessages = [...messages, userMessage]
+    
     setMessages(updatedMessages)
     setInput('')
     setLoading(true)
+    
     try {
       const token = localStorage.getItem('token')
-      const res = await axios.post('/api/chat/message', { messages: updatedMessages, userProfile: user }, { headers: { Authorization: `Bearer ${token}` } })
-      const aiResponse = res.data.message
-      if (aiResponse.includes('ROADMAP_READY:')) {
+      
+      // Hit the API endpoint
+      const res = await axios.post('/api/chat/message', 
+        { messages: updatedMessages, userProfile: user }, 
+        { headers: { Authorization: `Bearer ${token}` } }
+      )
+      
+      // Defensive Check: Ensure res.data and message field exist
+      const aiResponse = res.data?.message
+      
+      if (!aiResponse) {
+        console.error('Backend payload structure mismatch. Received:', res.data)
+        throw new Error('No valid message string returned from server.')
+      }
+
+      // Safe evaluation of the response string
+      if (typeof aiResponse === 'string' && aiResponse.includes('ROADMAP_READY:')) {
         const jsonStr = aiResponse.split('ROADMAP_READY:')[1]
         const roadmap = JSON.parse(jsonStr)
         setRoadmapData(roadmap)
         setRoadmapReady(true)
-        setMessages(prev => [...prev, { role: 'assistant', content: `🎉 I've put together your personalized **${roadmap.title}** roadmap with ${roadmap.nodes.length} stages — built around everything you just told me. Click below to dive in!` }])
+        setMessages(prev => [...prev, { 
+          role: 'assistant', 
+          content: `🎉 I've put together your personalized **${roadmap.title}** roadmap with ${roadmap.nodes.length} stages — built around everything you just told me. Click below to dive in!` 
+        }])
       } else {
         setMessages(prev => [...prev, { role: 'assistant', content: aiResponse }])
       }
     } catch (error) {
+      // Look at your browser DevTools console to see exactly what went wrong here!
+      console.error('Chat API Error details:', error)
+      console.error('Error response data:', error.response?.data)
+      
       setMessages(prev => [...prev, { role: 'assistant', content: 'Sorry, something went wrong. Please try again!' }])
     } finally {
       setLoading(false)
@@ -79,11 +103,11 @@ export default function ChatPage() {
     try {
       const token = localStorage.getItem('token')
       await axios.post('/api/chat/save-new-roadmap', { roadmap: roadmapData }, { headers: { Authorization: `Bearer ${token}` } })
-      // Clear chat now that roadmap is saved
       localStorage.removeItem(STORAGE_KEY)
       localStorage.removeItem(ROADMAP_KEY)
       navigate('/roadmap')
     } catch (error) {
+      console.error('Save Roadmap Error:', error)
       if (error.response?.data?.message?.includes('2 roadmaps')) {
         alert('You already have 2 saved roadmaps! Go to My Roadmaps to delete one first.')
         navigate('/my-roadmaps')

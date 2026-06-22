@@ -1,0 +1,534 @@
+import 'dotenv/config';
+import Groq from 'groq-sdk'
+import jwt from 'jsonwebtoken'
+import User from '../models/User.js'
+
+const normalizeId = (value) => String(value ?? '')
+
+const toPlainRoadmap = (roadmap) => {
+  if (!roadmap) return null
+  return typeof roadmap.toObject === 'function' ? roadmap.toObject() : roadmap
+}
+
+const syncActiveRoadmap = (user, roadmap) => {
+  const activeRoadmap = toPlainRoadmap(roadmap)
+  if (!activeRoadmap) {
+    user.currentRoadmap = null
+    return
+  }
+
+  user.currentRoadmap = activeRoadmap
+  if (user.roadmaps?.length) {
+    const activeId = normalizeId(activeRoadmap.id)
+    user.roadmaps = user.roadmaps.map(r => {
+      const plain = toPlainRoadmap(r)
+      const isActive = activeId ? normalizeId(plain.id) === activeId : plain.isActive
+      return isActive ? { ...plain, ...activeRoadmap, isActive: true } : { ...plain, isActive: false }
+    })
+    user.markModified('roadmaps')
+  }
+  user.markModified('currentRoadmap')
+}
+
+const youtubeSearchUrl = (topic) =>
+  `https://www.youtube.com/results?search_query=${encodeURIComponent(`${topic} tutorial`).replace(/%20/g, '+')}`
+
+const officialDocsUrl = (topic) => {
+  const t = topic.toLowerCase()
+  if (t.includes('html')) return 'https://developer.mozilla.org/en-US/docs/Web/HTML'
+  if (t.includes('css')) return 'https://developer.mozilla.org/en-US/docs/Web/CSS'
+  if (t.includes('javascript') || t.includes('js')) return 'https://developer.mozilla.org/en-US/docs/Web/JavaScript'
+  if (t.includes('react')) return 'https://react.dev/learn'
+  if (t.includes('node')) return 'https://nodejs.org/en/learn'
+  if (t.includes('python')) return 'https://docs.python.org/3/tutorial/'
+  if (t.includes('git')) return 'https://git-scm.com/book/en/v2'
+  if (t.includes('database') || t.includes('sql')) return 'https://www.postgresql.org/docs/current/tutorial.html'
+  return 'https://developer.mozilla.org/en-US/docs/Learn'
+}
+
+const buildFallbackResources = (topic) => [
+  { type: 'video', title: `${topic} tutorial`, url: youtubeSearchUrl(topic), source: 'YouTube' },
+  { type: 'docs', title: `${topic} documentation`, url: officialDocsUrl(topic), source: 'Official Docs' },
+  { type: 'course', title: `Practice ${topic}`, url: 'https://www.freecodecamp.org/learn/', source: 'freeCodeCamp' }
+]
+
+const normalizeNodeResources = (node) => {
+  const topic = node.label || node.title || 'this topic'
+  const resources = Array.isArray(node.resources) ? node.resources.filter(r => r?.url && r?.title) : []
+  const hasVideo = resources.some(r => r.type === 'video' || /youtube/i.test(`${r.source || ''} ${r.url || ''}`))
+  const merged = hasVideo ? resources : [buildFallbackResources(topic)[0], ...resources]
+  const fallback = buildFallbackResources(topic)
+
+  for (const resource of fallback) {
+    if (merged.length >= 4) break
+    const exists = merged.some(r => r.type === resource.type || r.url === resource.url)
+    if (!exists) merged.push(resource)
+  }
+
+  return {
+    ...node,
+    id: normalizeId(node.id || Date.now()),
+    status: node.status || 'notStarted',
+    resources: merged.slice(0, 4)
+  }
+}
+
+const normalizeRoadmap = (roadmap) => ({
+  ...roadmap,
+  nodes: (roadmap.nodes || []).map(normalizeNodeResources)
+})
+
+export const chat = async (req, res) => {
+  try {
+    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
+
+    const { messages, userProfile } = req.body
+
+    const systemContext = `
+You are a career guidance AI assistant for Afriq Learn, an intelligent learning platform.
+Your job is to help users discover their ideal career path in tech and generate a personalized learning roadmap.
+
+The user's profile:
+- Skill Level: ${userProfile?.skillLevel || 'Beginner'}
+- Preferred Language: ${userProfile?.preferredLanguage || 'Not specified'}
+- Learning Pace: ${userProfile?.learningPace || 'Normal'}
+
+Your conversation goal:
+1. Ask the user about their career interests in tech (frontend, backend, mobile, AI, cybersecurity, etc.)
+2. Ask about their specific goals (get a job, freelance, build projects, etc.)
+3. Ask if they have any specific technologies they want to learn
+4. After gathering enough info (3-4 messages), generate a roadmap
+
+When you have enough information, respond with EXACTLY this format:
+ROADMAP_READY:{"title":"Career Title","description":"Brief description","nodes":[{"id":"1","label":"Topic Name","description":"What this covers","estimatedTime":"1-2 weeks","level":1,"prerequisites":[],"skills":["skill 1","skill 2"],"resources":[{"type":"video","title":"Resource title","url":"https://www.youtube.com/results?search_query=topic+tutorial","source":"YouTube"},{"type":"docs","title":"Resource title","url":"https://developer.mozilla.org/en-US/docs/Web","source":"Official Docs"},{"type":"course","title":"Resource title","url":"https://www.freecodecamp.org","source":"freeCodeCamp"}]}]}
+
+IMPORTANT RULES for the roadmap:
+- Generate 10-14 nodes in true dependency order
+- Each node MUST include prerequisites, skills, and 2-4 resources
+- For video resources, use YouTube SEARCH links: https://www.youtube.com/results?search_query=topic+name+tutorial
+- For articles use real URLs: MDN, freeCodeCamp, W3Schools, The Odin Project, official docs
+- Add estimatedTime to each node
+
+Keep responses friendly, encouraging and concise. You are talking to someone in Africa who wants to build a tech career.
+Never generate the roadmap until you have asked at least 2-3 questions.
+`
+
+    const formattedMessages = [
+      { role: 'system', content: systemContext },
+      ...messages.map(msg => ({
+        role: msg.role === 'user' ? 'user' : 'assistant',
+        content: msg.content
+      }))
+    ]
+
+    const completion = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: formattedMessages,
+      max_tokens: 4000,
+      temperature: 0.7
+    })
+
+    const response = completion.choices[0].message.content
+    res.status(200).json({ message: response })
+  } catch (error) {
+    console.error('Groq error:', error)
+    res.status(500).json({ message: 'AI error', error: error.message })
+  }
+}
+
+export const generateRoadmap = async (req, res) => {
+  try {
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
+
+    const { careerTitle, userProfile, messages } = req.body
+
+    const prompt = `You are an expert curriculum designer. Generate a detailed, dependency-ordered learning roadmap.
+
+Career Goal: ${careerTitle}
+User Profile: ${JSON.stringify(userProfile)}
+
+Respond ONLY with valid JSON, no markdown:
+{
+  "title": "Career Path Title",
+  "description": "Brief description",
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Topic Name",
+      "description": "What this covers",
+      "estimatedTime": "1-2 weeks",
+      "level": 1,
+      "prerequisites": [],
+      "skills": ["concrete skill 1", "concrete skill 2"],
+      "resources": [
+        {"type": "video", "title": "Title", "url": "https://www.youtube.com/results?search_query=topic+tutorial", "source": "YouTube"},
+        {"type": "docs", "title": "Title", "url": "https://developer.mozilla.org", "source": "Official Docs"},
+        {"type": "course", "title": "Title", "url": "https://www.freecodecamp.org", "source": "freeCodeCamp"}
+      ]
+    }
+  ]
+}
+
+Rules:
+- Generate 10-14 nodes in true prerequisite order: fundamentals first, advanced topics last
+- Each node MUST have 2-4 resources, including at least one YouTube video search link and one documentation/article/course link
+- Every node MUST include realistic prerequisites using earlier node ids only, and 2-4 practical skills
+- Use YouTube search links for videos
+- estimatedTime should be realistic for the user's skill level and pace`
+
+    const completion = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 4000,
+      temperature: 0.7
+    })
+
+    let response = completion.choices[0].message.content
+    response = response.replace(/```json/g, '').replace(/```/g, '').trim()
+    const roadmap = normalizeRoadmap(JSON.parse(response))
+    res.status(200).json({ roadmap })
+  } catch (error) {
+    console.error('Roadmap generation error:', error)
+    res.status(500).json({ message: 'Error generating roadmap', error: error.message })
+  }
+}
+
+export const saveRoadmap = async (req, res) => {
+  try {
+    const { roadmap } = req.body
+    const token = req.headers.authorization?.split(' ')[1]
+    if (!token) return res.status(401).json({ message: 'Not authorized' })
+    const decoded = jwt.verify(token, process.env.JWT_SECRET)
+    const user = await User.findById(decoded.id)
+    const normalizedRoadmap = normalizeRoadmap(roadmap)
+    syncActiveRoadmap(user, normalizedRoadmap)
+    await user.save()
+    res.status(200).json({ message: 'Roadmap saved!' })
+  } catch (error) {
+    res.status(500).json({ message: 'Error saving roadmap', error: error.message })
+  }
+}
+
+export const saveNewRoadmap = async (req, res) => {
+  try {
+    const { roadmap } = req.body
+    const token = req.headers.authorization?.split(' ')[1]
+    if (!token) return res.status(401).json({ message: 'Not authorized' })
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET)
+    const user = await User.findById(decoded.id)
+
+    if (!user.roadmaps) user.roadmaps = []
+    if (user.roadmaps.length >= 2) {
+      return res.status(400).json({ message: 'You can only save up to 2 roadmaps. Please delete one first.' })
+    }
+
+    const normalizedRoadmap = normalizeRoadmap(roadmap)
+    const newRoadmap = {
+      id: Date.now().toString(),
+      title: normalizedRoadmap.title,
+      description: normalizedRoadmap.description,
+      nodes: normalizedRoadmap.nodes,
+      createdAt: new Date(),
+      isActive: true
+    }
+
+    user.roadmaps = user.roadmaps.map(r => ({ ...r, isActive: false }))
+    user.roadmaps.push(newRoadmap)
+    syncActiveRoadmap(user, newRoadmap)
+    user.markModified('roadmaps')
+    await user.save()
+
+    res.status(200).json({ message: 'Roadmap saved!', roadmap: newRoadmap })
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message })
+  }
+}
+
+export const getMyRoadmap = async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1]
+    if (!token) return res.status(401).json({ message: 'Not authorized' })
+    const decoded = jwt.verify(token, process.env.JWT_SECRET)
+    const user = await User.findById(decoded.id)
+    res.status(200).json({ roadmap: user.currentRoadmap })
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message })
+  }
+}
+
+export const getAllRoadmaps = async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1]
+    if (!token) return res.status(401).json({ message: 'Not authorized' })
+    const decoded = jwt.verify(token, process.env.JWT_SECRET)
+    const user = await User.findById(decoded.id)
+    const current = toPlainRoadmap(user.currentRoadmap)
+    const roadmaps = (user.roadmaps || []).map(r => {
+      const plain = toPlainRoadmap(r)
+      if (current && (plain.isActive || normalizeId(plain.id) === normalizeId(current.id))) {
+        return { ...plain, ...current, isActive: true }
+      }
+      return plain
+    })
+    res.status(200).json({ roadmaps })
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message })
+  }
+}
+
+export const switchRoadmap = async (req, res) => {
+  try {
+    const { roadmapId } = req.body
+    const token = req.headers.authorization?.split(' ')[1]
+    if (!token) return res.status(401).json({ message: 'Not authorized' })
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET)
+    const user = await User.findById(decoded.id)
+
+    user.roadmaps = user.roadmaps.map(r => ({ ...toPlainRoadmap(r), isActive: normalizeId(r.id) === normalizeId(roadmapId) }))
+    const active = user.roadmaps.find(r => normalizeId(r.id) === normalizeId(roadmapId))
+    if (!active) return res.status(404).json({ message: 'Roadmap not found' })
+    syncActiveRoadmap(user, active)
+    await user.save()
+
+    res.status(200).json({ message: 'Switched!', roadmap: active })
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message })
+  }
+}
+
+export const deleteRoadmap = async (req, res) => {
+  try {
+    const { roadmapId } = req.body
+    const token = req.headers.authorization?.split(' ')[1]
+    if (!token) return res.status(401).json({ message: 'Not authorized' })
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET)
+    const user = await User.findById(decoded.id)
+
+    user.roadmaps = user.roadmaps.filter(r => normalizeId(r.id) !== normalizeId(roadmapId)).map(toPlainRoadmap)
+    if (user.roadmaps.length > 0) {
+      user.roadmaps[0].isActive = true
+      syncActiveRoadmap(user, user.roadmaps[0])
+    } else {
+      user.currentRoadmap = null
+      user.markModified('currentRoadmap')
+    }
+    user.markModified('roadmaps')
+    await user.save()
+
+    res.status(200).json({ message: 'Deleted!' })
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message })
+  }
+}
+
+export const updateNodeStatus = async (req, res) => {
+  try {
+    const { nodeId, status } = req.body
+    const token = req.headers.authorization?.split(' ')[1]
+    if (!token) return res.status(401).json({ message: 'Not authorized' })
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET)
+    const user = await User.findById(decoded.id)
+
+    if (user.currentRoadmap && user.currentRoadmap.nodes) {
+      const updatedRoadmap = {
+        ...toPlainRoadmap(user.currentRoadmap),
+        nodes: user.currentRoadmap.nodes.map(node => {
+        if (normalizeId(node.id) === normalizeId(nodeId)) return { ...node, status }
+        return node
+        })
+      }
+      syncActiveRoadmap(user, updatedRoadmap)
+      await user.save()
+    }
+
+    res.status(200).json({ message: 'Status updated' })
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message })
+  }
+}
+
+export const generateQuiz = async (req, res) => {
+  try {
+    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
+
+    const { topic, difficulty, count = 5 } = req.body
+    const safeCount = Math.min(Math.max(Number(count) || 5, 3), 15)
+
+    const prompt = `You are an expert quiz writer for a tech learning app.
+
+Create a ${difficulty || 'beginner'} quiz about "${topic}".
+
+Respond ONLY with valid JSON, no markdown:
+{
+  "topic": "${topic}",
+  "difficulty": "${difficulty || 'beginner'}",
+  "questions": [
+    {
+      "id": "1",
+      "question": "Clear multiple-choice question",
+      "options": ["Option A", "Option B", "Option C", "Option D"],
+      "correctAnswer": 0,
+      "explanation": "Short explanation of why the answer is correct"
+    }
+  ]
+}
+
+Rules:
+- Generate exactly ${safeCount} questions
+- Each question must have exactly 4 options
+- correctAnswer must be the zero-based index of the correct option
+- Focus on practical understanding, not trick questions
+- Match the difficulty level`
+
+    const completion = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 2000,
+      temperature: 0.7
+    })
+
+    let response = completion.choices[0].message.content
+    response = response.replace(/```json/g, '').replace(/```/g, '').trim()
+    const quiz = JSON.parse(response)
+    res.status(200).json({ quiz })
+  } catch (error) {
+    console.error('Quiz generation error:', error)
+    res.status(500).json({ message: 'Error generating quiz', error: error.message })
+  }
+}
+
+export const saveQuizResult = async (req, res) => {
+  try {
+    const { topic, difficulty, score, total, passed, questions, answers, timeTaken } = req.body
+    const token = req.headers.authorization?.split(' ')[1]
+    if (!token) return res.status(401).json({ message: 'Not authorized' })
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET)
+    const user = await User.findById(decoded.id)
+
+    if (!user.quizResults) user.quizResults = []
+    user.quizResults.push({ topic, difficulty, score, total, passed, questions, answers, timeTaken, takenAt: new Date() })
+    await user.save()
+
+    res.status(200).json({ message: 'Quiz result saved!' })
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message })
+  }
+}
+
+export const getQuizResults = async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1]
+    if (!token) return res.status(401).json({ message: 'Not authorized' })
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET)
+    const user = await User.findById(decoded.id)
+
+    res.status(200).json({ results: user.quizResults || [] })
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message })
+  }
+}
+
+// ---- YouTube helper (#11/#12) ----
+const fetchYouTubeVideo = async (query) => {
+  try {
+    if (!process.env.YOUTUBE_API_KEY) return null
+    const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query + ' tutorial')}&type=video&videoEmbeddable=true&maxResults=1&relevanceLanguage=en&safeSearch=strict&order=relevance&key=${process.env.YOUTUBE_API_KEY}`
+    const r = await fetch(url)
+    const data = await r.json()
+    const item = data.items?.[0]
+    if (!item) return null
+    return {
+      videoId: item.id.videoId,
+      title: item.snippet.title,
+      channel: item.snippet.channelTitle,
+      thumbnail: item.snippet.thumbnails?.medium?.url
+    }
+  } catch (e) {
+    console.warn('YouTube fetch failed:', e.message)
+    return null
+  }
+}
+
+export const getTopicContent = async (req, res) => {
+  try {
+    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
+    const { topic, skillLevel } = req.body
+
+    const prompt = `You are a tech tutor for Afriq Learn. For the topic "${topic}" (learner level: ${skillLevel || 'Beginner'}), respond ONLY with valid JSON, no markdown fences:
+{
+  "summary": "2-3 sentence plain-language explanation of what this is and why it matters",
+  "notes": "A concise in-app lesson written in MARKDOWN. Use ## headings, bullet points, and 1-2 short code blocks where relevant. Under 400 words.",
+  "keyPoints": ["short takeaway 1", "short takeaway 2", "short takeaway 3"],
+  "searchQuery": "the best short youtube search phrase to learn this topic"
+}`
+
+    const completion = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 1500,
+      temperature: 0.6
+    })
+
+    let txt = completion.choices[0].message.content.replace(/```json/g, '').replace(/```/g, '').trim().replace(/[\r\n\t]+/g, ' ')
+    const content = JSON.parse(txt)
+    const video = await fetchYouTubeVideo(content.searchQuery || topic)
+    res.status(200).json({ content, video })
+  } catch (error) {
+    console.error('Topic content error:', error)
+    res.status(500).json({ message: 'Error fetching content', error: error.message })
+  }
+}
+
+// ---- (#13) In-app help/support chatbot ----
+export const helpChat = async (req, res) => {
+  try {
+    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
+    const { messages } = req.body
+
+    const system = `You are "Afriq Helper", the in-app support assistant for Afriq Learn, a learning platform for aspiring African tech talent.
+You help users understand how to USE the app and answer quick learning questions.
+Features you can explain:
+- Dashboard: streak, active roadmap, quick links.
+- Chat: talk to the AI to generate a personalised career roadmap (saved under My Roadmaps, max 2).
+- Roadmap page: stages with status (Not Started / In Progress / Done), resources, in-app videos and notes per topic; users can edit, add and delete stages.
+- Quizzes: pick a topic from the roadmap, choose difficulty and number of questions, timed quizzes, and review past results question-by-question.
+- Profile: edit name, preferred language, skill level, pace, toggle email reminders.
+Keep answers short, friendly and practical. If asked something off-topic, gently steer back to learning or using the app.`
+
+    const completion = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [{ role: 'system', content: system }, ...messages],
+      max_tokens: 700,
+      temperature: 0.6
+    })
+    res.status(200).json({ message: completion.choices[0].message.content })
+  } catch (error) {
+    res.status(500).json({ message: 'Help error', error: error.message })
+  }
+}
+
+// ---- (#3) Save edited/added/deleted nodes ----
+export const updateRoadmapNodes = async (req, res) => {
+  try {
+    const { nodes } = req.body
+    const token = req.headers.authorization?.split(' ')[1]
+    if (!token) return res.status(401).json({ message: 'Not authorized' })
+    const decoded = jwt.verify(token, process.env.JWT_SECRET)
+    const user = await User.findById(decoded.id)
+
+    if (user.currentRoadmap) {
+      const updatedRoadmap = normalizeRoadmap({ ...toPlainRoadmap(user.currentRoadmap), nodes })
+      syncActiveRoadmap(user, updatedRoadmap)
+      await user.save()
+    }
+    res.status(200).json({ message: 'Roadmap updated', roadmap: user.currentRoadmap })
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message })
+  }
+}
